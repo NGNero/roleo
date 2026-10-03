@@ -4,28 +4,73 @@
  */
 
 const API = {
-  /**
-   * Build the full API URL for a given path.
-   */
+  lastError: null,
+
   url(path) {
-    const base = (AppState.endpoint || 'http://localhost:1234/v1').replace(/\/$/, '');
+    const base = (AppState.endpoint || CONSTANTS.DEFAULT_ENDPOINT).replace(/\/$/, '');
     return `${base}${path}`;
   },
 
   /**
-   * Fetch available models from the endpoint.
+   * Turn a raw fetch error into a structured, user-facing diagnostic.
+   */
+  diagnoseError(err, url) {
+    if (err.name === 'AbortError') {
+      return {
+        type: 'timeout',
+        message: `Connection to ${url} timed out.`,
+        hint: 'Is your local server actually running and listening on this port?'
+      };
+    }
+    if (err instanceof TypeError) {
+      const isHttpsPage = window.location.protocol === 'https:';
+      const isHttpEndpoint = url.startsWith('http://');
+      const isLocalhost = /^http:\/\/(localhost|127\.0\.0\.1)(:|\/)/.test(url);
+
+      if (isHttpsPage && isHttpEndpoint && !isLocalhost) {
+        return {
+          type: 'mixed-content',
+          message: 'Mixed content blocked: this page is HTTPS but the endpoint is HTTP.',
+          hint: 'Browsers only allow HTTPS pages to reach http://localhost or http://127.0.0.1. Use those, or serve this page over HTTP.'
+        };
+      }
+      if (isHttpsPage && isHttpEndpoint && isLocalhost) {
+        return {
+          type: 'pna-cors',
+          message: 'Browser blocked the request to localhost (private network access / CORS).',
+          hint: 'In LM Studio: enable "CORS" and "Serve on Local Network" in the server settings. Chrome also requires the server to reply to preflight with "Access-Control-Allow-Private-Network: true".'
+        };
+      }
+      return {
+        type: 'network',
+        message: `Could not reach ${url}.`,
+        hint: 'Check that (1) the server is running, (2) CORS is enabled, (3) the endpoint URL is correct.'
+      };
+    }
+    return { type: 'unknown', message: err.message || String(err), hint: '' };
+  },
+
+  /**
+   * Fetch models. Returns an array (possibly empty). Diagnostics land in `API.lastError`.
    */
   async fetchModels() {
-    try {
-      const res = await fetch(this.url('/models'), {
-        method: 'GET',
-        headers: { 'Accept': 'application/json' }
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const rawModels = data.data || [];
+    this.lastError = null;
+    const url = this.url('/models');
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), CONSTANTS.FETCH_TIMEOUT_MS);
 
-      // Filter out non-text-generation models
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        signal: controller.signal,
+        mode: 'cors'
+      });
+
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+      const data = await res.json();
+      const rawModels = Array.isArray(data.data) ? data.data : [];
+
       return rawModels.filter(m => {
         const id = (m.id || '').toLowerCase();
         const type = (m.type || m.object || '').toLowerCase();
@@ -33,19 +78,20 @@ const API = {
         return !CONSTANTS.NON_TEXT_KEYWORDS.some(kw => id.includes(kw));
       });
     } catch (err) {
-      console.warn('Failed to fetch models:', err.message);
+      this.lastError = this.diagnoseError(err, url);
+      console.warn('[Roleo] Model fetch failed:', this.lastError.type, this.lastError.message);
       return [];
+    } finally {
+      clearTimeout(timeoutId);
     }
   },
 
   /**
-   * Send a chat completion request with streaming support.
-   * @param {Array} messages - Array of {role, content} messages
-   * @param {Object} options - { temperature, onDelta, onError, onDone, signal }
+   * Streaming chat completion.
    */
   async streamChat(messages, options = {}) {
     const {
-      temperature = 0.7,
+      temperature = AppState.temperature ?? 0.7,
       onDelta = () => {},
       onError = () => {},
       onDone = () => {},
@@ -65,7 +111,7 @@ const API = {
         signal
       });
 
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
 
       const reader = res.body.getReader();
       const decoder = new TextDecoder('utf-8');
@@ -87,24 +133,18 @@ const API = {
               const parsed = JSON.parse(trimmed.slice(6));
               const delta = parsed.choices?.[0]?.delta?.content || '';
               if (delta) onDelta(delta);
-            } catch {
-              // Skip malformed SSE lines
-            }
+            } catch { /* skip malformed SSE */ }
           }
         }
       }
 
       onDone();
     } catch (err) {
-      if (err.name !== 'AbortError') {
-        onError(err);
-      }
+      if (err.name === 'AbortError') return;
+      onError(err);
     }
   },
 
-  /**
-   * Build the system prompt for a character + persona combo.
-   */
   buildSystemPrompt(char) {
     const persona = AppState.getActivePersona();
     const description = Templates.process(char.description || '', char.name);
@@ -121,39 +161,30 @@ User Details: ${persona.desc || ''}
 Write responses as ${char.name}. Stay strictly in character.`;
   },
 
-  /**
-   * Convert internal message format to API message format.
-   */
+  toApiMessage(msg) {
+    const text = msg.variants[msg.activeVariant] || '';
+    if (msg.sender === 'user' && msg.image) {
+      return {
+        role: 'user',
+        content: [
+          { type: 'text', text },
+          { type: 'image_url', image_url: { url: msg.image } }
+        ]
+      };
+    }
+    return { role: msg.sender, content: text };
+  },
+
   buildAPIMessages(chat, char) {
     const messages = [{ role: 'system', content: this.buildSystemPrompt(char) }];
-
     for (const msg of chat.messages) {
       const text = msg.variants[msg.activeVariant];
       if (!text && !msg.image) continue;
-
-      if (msg.sender === 'user') {
-        if (msg.image) {
-          messages.push({
-            role: 'user',
-            content: [
-              { type: 'text', text: text || '' },
-              { type: 'image_url', image_url: { url: msg.image } }
-            ]
-          });
-        } else {
-          messages.push({ role: 'user', content: text });
-        }
-      } else {
-        messages.push({ role: 'assistant', content: text });
-      }
+      messages.push(this.toApiMessage(msg));
     }
-
     return messages;
   },
 
-  /**
-   * Generate AI response for the active chat.
-   */
   async generateResponse(chat, char, onUpdate) {
     // Collapse variant branches before generating
     chat.messages.forEach(m => {
@@ -175,17 +206,19 @@ Write responses as ${char.name}. Stay strictly in character.`;
     AppState.isGenerating = true;
     AppState.abortController = new AbortController();
 
-    const apiMessages = this.buildAPIMessages(chat, char);
-
-    await this.streamChat(apiMessages, {
-      temperature: 0.7,
+    await this.streamChat(this.buildAPIMessages(chat, char), {
+      temperature: AppState.temperature,
       signal: AppState.abortController.signal,
       onDelta: (delta) => {
         aiMsg.variants[0] += delta;
         onUpdate();
       },
-      onError: () => {
-        aiMsg.variants[0] += "\n\n*[Error communicating with server]*";
+      onError: (err) => {
+        const diag = this.diagnoseError(err, this.url('/chat/completions'));
+        aiMsg.variants[0] += `\n\n*[Error: ${diag.message}]*`;
+        Toast.error(diag.message + (diag.hint ? ' — ' + diag.hint : ''));
+        AppState.resetGeneration();
+        AppState.save();
         onUpdate();
       },
       onDone: () => {
@@ -196,19 +229,15 @@ Write responses as ${char.name}. Stay strictly in character.`;
     });
   },
 
-  /**
-   * Regenerate the last AI message with a new variant.
-   */
   async regenerateResponse(chat, char, msgIndex, onUpdate) {
     const msg = chat.messages[msgIndex];
-    const persona = AppState.getActivePersona();
 
-    const systemPrompt = `Roleplay context:\nCharacter: ${char.name}\nDescription: ${char.description || ''}\nUser Persona: ${persona.name} (${persona.pronouns || ''})`;
-
-    const apiMessages = [{ role: 'system', content: systemPrompt }];
+    const apiMessages = [{ role: 'system', content: this.buildSystemPrompt(char) }];
     for (let i = 0; i < msgIndex; i++) {
       const m = chat.messages[i];
-      apiMessages.push({ role: m.sender, content: m.variants[m.activeVariant] });
+      const text = m.variants[m.activeVariant];
+      if (!text && !m.image) continue;
+      apiMessages.push(this.toApiMessage(m));
     }
 
     msg.variants.push('');
@@ -219,14 +248,18 @@ Write responses as ${char.name}. Stay strictly in character.`;
     AppState.abortController = new AbortController();
 
     await this.streamChat(apiMessages, {
-      temperature: 0.85,
+      temperature: Math.min(1.5, AppState.temperature + 0.15),
       signal: AppState.abortController.signal,
       onDelta: (delta) => {
         msg.variants[msg.activeVariant] += delta;
         onUpdate();
       },
-      onError: () => {
-        msg.variants[msg.activeVariant] += "\n\n*[Failed to regenerate]*";
+      onError: (err) => {
+        const diag = this.diagnoseError(err, this.url('/chat/completions'));
+        msg.variants[msg.activeVariant] += `\n\n*[Error: ${diag.message}]*`;
+        Toast.error(diag.message + (diag.hint ? ' — ' + diag.hint : ''));
+        AppState.resetGeneration();
+        AppState.save();
         onUpdate();
       },
       onDone: () => {
@@ -237,9 +270,6 @@ Write responses as ${char.name}. Stay strictly in character.`;
     });
   },
 
-  /**
-   * Enhance user message text with AI.
-   */
   async enhanceMessage(text, onDelta) {
     AppState.isGenerating = true;
     AppState.abortController = new AbortController();
@@ -251,21 +281,17 @@ Write responses as ${char.name}. Stay strictly in character.`;
       temperature: 0.7,
       signal: AppState.abortController.signal,
       onDelta,
-      onDone: () => {
-        AppState.resetGeneration();
-      },
-      onError: () => {
-        AppState.resetGeneration();
-      }
+      onDone: () => AppState.resetGeneration(),
+      onError: () => AppState.resetGeneration()
     });
   },
 
-  /**
-   * Create a message from AI on behalf of the user.
-   */
   async createUserMessage(chat, char, onDelta) {
     const persona = AppState.getActivePersona();
-    const contextText = chat.messages.slice(-4).map(m => `${m.sender}: ${m.variants[m.activeVariant]}`).join('\n');
+    const contextText = chat.messages
+      .slice(-4)
+      .map(m => `${m.sender}: ${m.variants[m.activeVariant]}`)
+      .join('\n');
 
     AppState.isGenerating = true;
     AppState.abortController = new AbortController();
@@ -277,12 +303,8 @@ Write responses as ${char.name}. Stay strictly in character.`;
       temperature: 0.8,
       signal: AppState.abortController.signal,
       onDelta,
-      onDone: () => {
-        AppState.resetGeneration();
-      },
-      onError: () => {
-        AppState.resetGeneration();
-      }
+      onDone: () => AppState.resetGeneration(),
+      onError: () => AppState.resetGeneration()
     });
   }
 };
