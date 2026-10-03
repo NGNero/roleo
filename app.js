@@ -1,13 +1,10 @@
 /**
  * Roleo - AI Roleplay Studio
- * Main application orchestrator. Imports modules and wires everything together.
+ * Main application orchestrator.
  */
 
 // ─── Chat Operations ─────────────────────────────────────────────────────────
 const Chat = {
-  /**
-   * Create a new chat session for a character.
-   */
   createNew(charId) {
     const char = AppState.characters.find(c => c.id === charId);
     if (!char) return;
@@ -30,20 +27,17 @@ const Chat = {
 
     AppState.chats.push(newChat);
     AppState.activeChatId = newChat.id;
+    AppState.editingMsgId = null;
     AppState.save();
     UI.renderRecentChats();
     UI.renderActiveChat();
   },
 
-  /**
-   * Send a user message and trigger AI response.
-   */
   async sendMessage() {
+    // Stop button behavior when generating
     if (AppState.isGenerating) {
-      if (AppState.abortController) {
-        AppState.abortController.abort();
-        AppState.abortController = null;
-      }
+      AppState.abortController?.abort();
+      AppState.resetGeneration();
       UI.setGeneratingState(false);
       return;
     }
@@ -56,10 +50,9 @@ const Chat = {
 
     const chat = AppState.getActiveChat();
     if (!chat) return;
-
     const char = AppState.getActiveCharacter();
+    if (!char) return;
 
-    // Add user message
     chat.messages.push({
       id: Security.generateId('msg'),
       sender: 'user',
@@ -77,9 +70,6 @@ const Chat = {
     await API.generateResponse(chat, char, () => UI.renderMessages());
   },
 
-  /**
-   * Regenerate the last AI message.
-   */
   async regenerate(msgId) {
     if (AppState.isGenerating || !AppState.selectedModel) return;
 
@@ -90,12 +80,10 @@ const Chat = {
     if (msgIndex <= 0 || msgIndex !== chat.messages.length - 1) return;
 
     const char = AppState.getActiveCharacter();
+    if (!char) return;
     await API.regenerateResponse(chat, char, msgIndex, () => UI.renderMessages());
   },
 
-  /**
-   * Switch between message variants.
-   */
   switchVariant(msgId, step) {
     const chat = AppState.getActiveChat();
     if (!chat) return;
@@ -106,59 +94,46 @@ const Chat = {
     UI.renderMessages();
   },
 
-  /**
-   * Delete a message from the chat.
-   */
   deleteMessage(msgId) {
     const chat = AppState.getActiveChat();
     if (!chat) return;
-
     const index = chat.messages.findIndex(m => m.id === msgId);
     if (index === 0) return; // Protect greeting
-
     chat.messages = chat.messages.filter(m => m.id !== msgId);
     AppState.save();
     UI.renderMessages();
   },
 
-  /**
-   * Rewind chat to a specific message (truncate after it).
-   */
   rewindTo(msgId) {
     const chat = AppState.getActiveChat();
     if (!chat) return;
-
     const msgIndex = chat.messages.findIndex(m => m.id === msgId);
     if (msgIndex === -1) return;
-
     chat.messages = chat.messages.slice(0, msgIndex + 1);
     AppState.save();
     UI.renderMessages();
   },
 
-  /**
-   * Start inline editing of a message.
-   */
   startEdit(msgId) {
     AppState.editingMsgId = msgId;
     UI.renderMessages();
   },
 
-  /**
-   * Copy message text to clipboard.
-   */
   async copyMessage(text) {
     try {
       await navigator.clipboard.writeText(text);
+      Toast.success('Copied to clipboard.');
     } catch (err) {
       console.warn('Clipboard copy failed:', err);
+      Toast.error('Clipboard access denied by the browser.');
     }
   },
 
-  /**
-   * Enhance the current user message with AI.
-   */
   async enhanceMessage() {
+    if (AppState.isGenerating) {
+      Toast.warn('Please wait for the current generation to finish.');
+      return;
+    }
     const input = DOM.$('#message-input');
     const text = input.value.trim();
     if (!text || !AppState.selectedModel) return;
@@ -174,9 +149,7 @@ const Chat = {
         UI.adjustInputHeight();
       });
     } catch (err) {
-      if (err.name !== 'AbortError') {
-        input.value = originalText;
-      }
+      if (err.name !== 'AbortError') input.value = originalText;
     } finally {
       input.disabled = false;
       UI.setGeneratingState(false);
@@ -185,18 +158,19 @@ const Chat = {
     }
   },
 
-  /**
-   * Have AI write a message on behalf of the user.
-   */
   async createMessageWithAI() {
+    if (AppState.isGenerating) {
+      Toast.warn('Please wait for the current generation to finish.');
+      return;
+    }
     if (!AppState.selectedModel) return;
 
     const chat = AppState.getActiveChat();
     if (!chat) return;
-
     const char = AppState.getActiveCharacter();
-    const input = DOM.$('#message-input');
+    if (!char) return;
 
+    const input = DOM.$('#message-input');
     input.value = '';
     input.disabled = true;
     UI.setGeneratingState(true);
@@ -227,28 +201,31 @@ const Chat = {
 
     const errorBox = DOM.$('#char-modal-error');
 
-    if (!name || !tagline || !description || !firstMsg) {
-      errorBox.textContent = 'Please fill out all required fields (Name, Tagline, Description, and First Message Greeting).';
+    // Inline validation with helpful messages
+    const missing = [];
+    if (!name) missing.push('Name');
+    if (!tagline) missing.push('Tagline');
+    if (!description) missing.push('Description');
+    if (!firstMsg) missing.push('Greeting');
+
+    if (missing.length > 0) {
+      errorBox.textContent = `Please fill out: ${missing.join(', ')}.`;
       DOM.show(errorBox);
+      // Focus the first missing field
+      if (!name) DOM.$('#input-char-name').focus();
+      else if (!tagline) DOM.$('#input-char-tagline').focus();
+      else if (!description) DOM.$('#input-char-desc').focus();
+      else DOM.$('#input-char-firstmsg').focus();
       return;
     }
 
     DOM.hide(errorBox);
 
-    const data = {
-      name,
-      tagline,
-      avatar: AppState.tempCharAvatar,
-      description,
-      firstMsg,
-      dialogues
-    };
+    const data = { name, tagline, avatar: AppState.tempCharAvatar, description, firstMsg, dialogues };
 
     if (AppState.editingCharId) {
       const idx = AppState.characters.findIndex(c => c.id === AppState.editingCharId);
-      if (idx !== -1) {
-        AppState.characters[idx] = { ...AppState.characters[idx], ...data };
-      }
+      if (idx !== -1) AppState.characters[idx] = { ...AppState.characters[idx], ...data };
     } else {
       const newChar = { id: Security.generateId('c'), ...data };
       AppState.characters.push(newChar);
@@ -258,7 +235,8 @@ const Chat = {
     AppState.save();
     UI.renderCharacters();
     UI.renderActiveChat();
-    DOM.hide(DOM.$('#char-modal'));
+    Modals.close('char-modal');
+    Toast.success(AppState.editingCharId ? 'Character updated.' : 'Character created.');
   },
 
   deleteCharacter(charId) {
@@ -274,13 +252,93 @@ const Chat = {
     AppState.save();
     UI.renderCharacters();
     UI.renderActiveChat();
+    Toast.success('Character deleted.');
+  },
+
+  exportCharacter() {
+    const char = AppState.getActiveCharacter();
+    if (!char) { Toast.error('No active character to export.'); return; }
+
+    const data = {
+      _roleo_export: 1,
+      _version: 1,
+      name: char.name,
+      tagline: char.tagline || '',
+      avatar: char.avatar || '',
+      description: char.description || '',
+      firstMsg: char.firstMsg || '',
+      dialogues: char.dialogues || ''
+    };
+
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${char.name.replace(/[^\w.-]+/g, '_') || 'character'}.roleo.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    Toast.success('Character exported.');
+  },
+
+  importCharacter(file) {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target.result);
+        if (!data || !data.name || !data.firstMsg) throw new Error('Missing required fields.');
+
+        const newChar = {
+          id: Security.generateId('c'),
+          name: String(data.name),
+          tagline: String(data.tagline || ''),
+          avatar: typeof data.avatar === 'string' ? data.avatar : '',
+          description: String(data.description || ''),
+          firstMsg: String(data.firstMsg),
+          dialogues: String(data.dialogues || '')
+        };
+        AppState.characters.push(newChar);
+        AppState.save();
+        UI.renderCharacters();
+        Toast.success(`Imported "${newChar.name}".`);
+      } catch (err) {
+        Toast.error('Import failed: ' + err.message);
+      }
+    };
+    reader.readAsText(file);
+  },
+
+  exportChat() {
+    const chat = AppState.getActiveChat();
+    const char = AppState.getActiveCharacter();
+    if (!chat || !char) { Toast.error('No active chat to export.'); return; }
+
+    const lines = [`# ${chat.title || 'Chat'}`, `Character: ${char.name}`, `Date: ${new Date().toLocaleString()}`, ''];
+    chat.messages.forEach(m => {
+      const text = m.variants[m.activeVariant] || '';
+      const name = m.sender === 'user' ? AppState.getActivePersona().name : char.name;
+      lines.push(`**${name}:** ${text}`);
+      lines.push('');
+    });
+
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(chat.title || 'chat').replace(/[^\w.-]+/g, '_')}.md`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    Toast.success('Chat exported as Markdown.');
   },
 
   // ─── Persona CRUD ──────────────────────────────────────────────────────────
 
   savePersona() {
     const name = DOM.$('#input-persona-name').value.trim();
-    if (!name) return;
+    if (!name) { Toast.warn('Please give your persona a name.'); return; }
 
     const data = {
       name,
@@ -291,9 +349,7 @@ const Chat = {
 
     if (AppState.editingPersonaId) {
       const idx = AppState.personas.findIndex(p => p.id === AppState.editingPersonaId);
-      if (idx !== -1) {
-        AppState.personas[idx] = { ...AppState.personas[idx], ...data };
-      }
+      if (idx !== -1) AppState.personas[idx] = { ...AppState.personas[idx], ...data };
     } else {
       const newPersona = { id: Security.generateId('p'), ...data };
       AppState.personas.push(newPersona);
@@ -302,12 +358,13 @@ const Chat = {
 
     AppState.save();
     UI.renderPersonas();
-    DOM.hide(DOM.$('#persona-modal'));
+    Modals.close('persona-modal');
+    Toast.success('Persona saved.');
   },
 
   deleteActivePersona() {
     if (AppState.personas.length <= 1) {
-      alert('You must have at least one persona.');
+      Toast.warn('You must have at least one persona.');
       return;
     }
     if (!confirm('Are you sure you want to delete this persona?')) return;
@@ -316,6 +373,7 @@ const Chat = {
     AppState.activePersonaId = AppState.personas[0].id;
     AppState.save();
     UI.renderPersonas();
+    Toast.success('Persona deleted.');
   },
 
   // ─── Chat Session Management ───────────────────────────────────────────────
@@ -335,13 +393,14 @@ const Chat = {
   }
 };
 
-// ─── Global Helpers (for inline onclick handlers in HTML) ────────────────────
+// ─── Global helpers (for inline onclick handlers) ────────────────────────────
 function switchRightTab(tabName) { UI.switchRightTab(tabName); }
+
 function insertTagInto(elementId, tagText) {
   const el = DOM.$(`#${elementId}`);
   if (!el) return;
-  const start = el.selectionStart || el.value.length;
-  const end = el.selectionEnd || el.value.length;
+  const start = el.selectionStart ?? el.value.length;
+  const end = el.selectionEnd ?? el.value.length;
   el.value = el.value.substring(0, start) + tagText + el.value.substring(end);
   el.selectionStart = el.selectionEnd = start + tagText.length;
   el.focus();
@@ -353,7 +412,7 @@ function insertTagInto(elementId, tagText) {
 document.addEventListener('DOMContentLoaded', () => {
   AppState.load();
   UI.init();
-  UI.fetchAndRenderModels();
+  UI.fetchAndRenderModels({ silent: true }); // no error toast on first load
   UI.renderPersonas();
   UI.renderCharacters();
   UI.switchRightTab('recents');
