@@ -49,6 +49,7 @@
           </button>
           <span id="header-char-name" class="text-xs font-bold text-white tracking-wide">Roleo</span>
         </div>
+        <button id="btn-export-chat" class="text-[11px] text-zinc-400 hover:text-white px-2.5 py-1 rounded-lg hover:bg-[#202023] transition" title="Export chat as Markdown">Export</button>
       </header>
 
       <!-- Empty State -->
@@ -65,8 +66,7 @@
 
       <!-- Active Chat View -->
       <div id="chat-view" class="hidden flex-1 flex flex-col h-full overflow-hidden">
-        <div id="messages-container" class="flex-1 overflow-y-auto px-4 md:px-12 lg:px-24 py-6 space-y-6 custom-scrollbar" aria-live="polite">
-        </div>
+        <div id="messages-container" class="flex-1 overflow-y-auto px-4 md:px-12 lg:px-24 py-6 space-y-6 custom-scrollbar" aria-live="polite"></div>
 
         <div class="p-4 bg-gradient-to-t from-[#121214] via-[#121214] to-transparent">
           <div class="max-w-3xl mx-auto space-y-2 relative">
@@ -156,6 +156,13 @@
           <button id="btn-edit-char" class="w-full py-2.5 rounded-xl border border-[#3f3f46] text-white bg-[#27272a] font-medium hover:bg-zinc-700 transition">
             Edit Character Settings
           </button>
+          <div class="grid grid-cols-2 gap-2">
+            <button id="btn-export-char" class="py-2.5 rounded-xl border border-[#3f3f46] text-white bg-[#27272a] font-medium hover:bg-zinc-700 transition">Export</button>
+            <label class="py-2.5 rounded-xl border border-[#3f3f46] text-white bg-[#27272a] font-medium hover:bg-zinc-700 transition text-center cursor-pointer">
+              Import
+              <input type="file" id="input-import-char" accept=".json,application/json" class="hidden">
+            </label>
+          </div>
           <button id="btn-delete-char" class="w-full py-2.5 rounded-xl border border-red-800/40 text-red-400 bg-red-950/30 font-medium hover:bg-red-900/50 transition">
             Delete Character
           </button>
@@ -168,7 +175,7 @@
               <input type="text" id="endpoint-input" placeholder="http://localhost:1234/v1"
                 class="w-full bg-[#202023] text-white rounded-xl border border-[#27272a] p-2.5 focus:outline-none focus:border-zinc-500 text-xs font-mono"
                 value="http://localhost:1234/v1">
-              <p class="text-[10px] text-zinc-500 mt-1">Enter your OpenAI-compatible API endpoint URL.</p>
+              <p class="text-[10px] text-zinc-500 mt-1">OpenAI-compatible API endpoint URL.</p>
             </div>
 
             <div>
@@ -180,109 +187,173 @@
                 <button id="btn-fetch-models" title="Fetch Models" aria-label="Fetch Models" class="px-3 py-1.5 rounded-xl border border-[#27272a] bg-[#202023] text-zinc-300 hover:text-white shrink-0">↻</button>
               </div>
             </div>
+
+            <div id="model-status" class="hidden"></div>
+
+            <div>
+              <div class="flex justify-between items-center mb-2">
+                <label class="block font-semibold uppercase tracking-wider text-zinc-500 text-[11px]">Temperature</label>
+                <span id="temperature-value" class="text-[11px] font-mono text-zinc-300">0.70</span>
+              </div>
+              <input type="range" id="temperature-slider" min="0" max="1.5" step="0.05" value="0.7" class="w-full cursor-pointer">
+              <p class="text-[10px] text-zinc-500 mt-1">Lower = focused · Higher = creative.</p>
+            </div>
           </div>
         </div>
       </div>
     </aside>
   </div>
 
-  <!-- Character Modal -->
-  <div id="char-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
-    <div class="bg-[#18181b] border border-[#27272a] rounded-2xl w-full max-w-lg p-6 space-y-4 max-h-[90vh] overflow-y-auto custom-scrollbar">
-      <h3 class="text-base font-bold text-white" id="char-modal-title">Character Setup</h3>
-
-      <div id="char-modal-error" class="hidden text-xs text-red-400 bg-red-950/40 border border-red-800/50 p-2.5 rounded-xl"></div>
-
-      <div class="space-y-4 text-xs">
+  <!-- ─── Character Dialog ─────────────────────────────────────────────── -->
+  <dialog id="char-modal" class="modal" aria-labelledby="char-modal-title">
+    <div class="modal-panel">
+      <header class="modal-header">
         <div>
-          <label class="block text-zinc-400 mb-1">Character Name <span class="text-red-400">*</span></label>
-          <input type="text" id="input-char-name" class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500">
+          <h3 id="char-modal-title" class="text-base font-bold text-white">Create Character</h3>
+          <p class="text-[11px] text-zinc-500 mt-0.5">Fields marked <span class="text-red-400">*</span> are required</p>
         </div>
-        <div>
-          <label class="block text-zinc-400 mb-1">Tagline <span class="text-red-400">*</span></label>
-          <input type="text" id="input-char-tagline" class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500" placeholder="A brief one-line summary...">
-        </div>
-        <div>
-          <label class="block text-zinc-400 mb-1">Avatar Image (Upload, Optional)</label>
-          <div class="flex items-center gap-3">
-            <input type="file" id="input-char-avatar-file" accept="image/*" class="text-xs text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-[#27272a] file:text-white file:cursor-pointer hover:file:bg-zinc-700">
-            <img id="preview-char-avatar" alt="Character preview" class="w-10 h-10 rounded-full object-cover border border-[#27272a] hidden">
-          </div>
-        </div>
+        <button type="button" class="modal-close" data-dialog-close aria-label="Close dialog">✕</button>
+      </header>
 
-        <div>
-          <div class="flex justify-between items-center mb-1">
-            <label class="block text-zinc-400">Description (Personality, Scenario, Context) <span class="text-red-400">*</span></label>
-            <div id="tag-badge-desc" class="flex gap-1 text-[10px]"></div>
-          </div>
-          <textarea id="input-char-desc" rows="4" class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500 leading-relaxed" placeholder="Describe personality, background, scenario, appearance... Supports dynamic tags."></textarea>
-          <div class="flex items-center gap-1.5 mt-1 text-[11px] text-zinc-400">
-            <span class="text-[10px] text-zinc-500">Insert tag:</span>
-            <button type="button" onclick="insertTagInto('input-char-desc', '{{char}}')" class="px-1.5 py-0.5 rounded bg-[#27272a] hover:bg-zinc-700 text-indigo-300 font-mono text-[10px] transition">+ {{char}}</button>
-            <button type="button" onclick="insertTagInto('input-char-desc', '{{user}}')" class="px-1.5 py-0.5 rounded bg-[#27272a] hover:bg-zinc-700 text-indigo-300 font-mono text-[10px] transition">+ {{user}}</button>
-            <button type="button" onclick="insertTagInto('input-char-desc', '{{user_pronouns}}')" class="px-1.5 py-0.5 rounded bg-[#27272a] hover:bg-zinc-700 text-indigo-300 font-mono text-[10px] transition">+ {{user_pronouns}}</button>
-          </div>
-        </div>
+      <div class="modal-body">
+        <div id="char-modal-error" role="alert" class="hidden mb-4 text-xs text-red-400 bg-red-950/40 border border-red-800/50 p-2.5 rounded-xl"></div>
 
-        <div>
-          <div class="flex justify-between items-center mb-1">
-            <label class="block text-zinc-400">First Message Greeting <span class="text-red-400">*</span></label>
-            <div id="tag-badge-firstmsg" class="flex gap-1 text-[10px]"></div>
-          </div>
-          <textarea id="input-char-firstmsg" rows="3" class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500 leading-relaxed" placeholder="Initial greeting text when starting a chat."></textarea>
-          <div class="flex items-center gap-1.5 mt-1 text-[11px] text-zinc-400">
-            <span class="text-[10px] text-zinc-500">Insert tag:</span>
-            <button type="button" onclick="insertTagInto('input-char-firstmsg', '{{char}}')" class="px-1.5 py-0.5 rounded bg-[#27272a] hover:bg-zinc-700 text-indigo-300 font-mono text-[10px] transition">+ {{char}}</button>
-            <button type="button" onclick="insertTagInto('input-char-firstmsg', '{{user}}')" class="px-1.5 py-0.5 rounded bg-[#27272a] hover:bg-zinc-700 text-indigo-300 font-mono text-[10px] transition">+ {{user}}</button>
-            <button type="button" onclick="insertTagInto('input-char-firstmsg', '{{user_pronouns}}')" class="px-1.5 py-0.5 rounded bg-[#27272a] hover:bg-zinc-700 text-indigo-300 font-mono text-[10px] transition">+ {{user_pronouns}}</button>
-          </div>
-        </div>
+        <div class="grid grid-cols-1 md:grid-cols-[1fr_200px] gap-6">
+          <div class="space-y-4 min-w-0">
+            <!-- Avatar + Name + Tagline -->
+            <div class="grid grid-cols-[auto_1fr] gap-4">
+              <div>
+                <span class="field-label">Avatar</span>
+                <label class="avatar-drop" id="char-avatar-drop" for="input-char-avatar-file">
+                  <img id="preview-char-avatar" class="hidden" alt="Avatar preview">
+                  <span class="avatar-drop-hint" id="char-avatar-hint">Drop<br>or click</span>
+                  <input type="file" id="input-char-avatar-file" accept="image/*" class="hidden">
+                </label>
+              </div>
+              <div class="space-y-3 min-w-0">
+                <div>
+                  <label class="field-label" for="input-char-name">Name <span class="text-red-400">*</span></label>
+                  <input type="text" id="input-char-name" class="field-input" placeholder="Elara Nightwind" autocomplete="off">
+                </div>
+                <div>
+                  <div class="flex items-center justify-between mb-1">
+                    <label class="field-label mb-0" for="input-char-tagline">Tagline <span class="text-red-400">*</span></label>
+                    <span id="char-tagline-count" class="text-[10px] text-zinc-500 tabular-nums">0/80</span>
+                  </div>
+                  <input type="text" id="input-char-tagline" class="field-input" maxlength="80" placeholder="A brief one-line summary...">
+                </div>
+              </div>
+            </div>
 
-        <div>
-          <label class="block text-zinc-400 mb-1">Example Dialogues (Optional)</label>
-          <textarea id="input-char-dialogues" rows="3" class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500 font-mono text-[11px]" placeholder="<START>&#10;{{user}}: Hi!&#10;{{char}}: Hello there!"></textarea>
+            <!-- Description -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="field-label mb-0" for="input-char-desc">Description <span class="text-red-400">*</span></label>
+                <div id="tag-badge-desc" class="flex gap-1 flex-wrap"></div>
+              </div>
+              <textarea id="input-char-desc" rows="5" class="field-input leading-relaxed" placeholder="Personality, background, scenario, appearance..."></textarea>
+              <div class="field-tags-row">
+                <span class="field-hint">Insert:</span>
+                <button type="button" onclick="insertTagInto('input-char-desc', '{{char}}')" class="field-tag-btn">{{char}}</button>
+                <button type="button" onclick="insertTagInto('input-char-desc', '{{user}}')" class="field-tag-btn">{{user}}</button>
+                <button type="button" onclick="insertTagInto('input-char-desc', '{{user_pronouns}}')" class="field-tag-btn">{{user_pronouns}}</button>
+              </div>
+            </div>
+
+            <!-- First message -->
+            <div>
+              <div class="flex items-center justify-between mb-1">
+                <label class="field-label mb-0" for="input-char-firstmsg">Greeting <span class="text-red-400">*</span></label>
+                <div id="tag-badge-firstmsg" class="flex gap-1 flex-wrap"></div>
+              </div>
+              <textarea id="input-char-firstmsg" rows="3" class="field-input leading-relaxed" placeholder="Initial message when starting a new chat..."></textarea>
+              <div class="field-tags-row">
+                <span class="field-hint">Insert:</span>
+                <button type="button" onclick="insertTagInto('input-char-firstmsg', '{{char}}')" class="field-tag-btn">{{char}}</button>
+                <button type="button" onclick="insertTagInto('input-char-firstmsg', '{{user}}')" class="field-tag-btn">{{user}}</button>
+                <button type="button" onclick="insertTagInto('input-char-firstmsg', '{{user_pronouns}}')" class="field-tag-btn">{{user_pronouns}}</button>
+              </div>
+            </div>
+
+            <!-- Dialogues (collapsible) -->
+            <details class="advanced-section">
+              <summary>Example dialogues <span class="text-zinc-500 font-normal">(optional)</span></summary>
+              <div class="pt-3">
+                <textarea id="input-char-dialogues" rows="4" class="field-input font-mono text-[11px] leading-relaxed" placeholder="<START>&#10;{{user}}: Hi!&#10;{{char}}: Hello there!"></textarea>
+                <p class="field-hint mt-1">Use <code>&lt;START&gt;</code> to separate dialogue examples.</p>
+              </div>
+            </details>
+          </div>
+
+          <!-- Live preview -->
+          <aside class="hidden md:block">
+            <div class="sticky top-0">
+              <div class="field-label">Live preview</div>
+              <div class="bg-[#202023] border border-[#27272a] rounded-2xl p-4 text-center space-y-2">
+                <img id="char-preview-avatar" alt="" class="w-16 h-16 rounded-full mx-auto object-cover border-2 border-[#27272a]">
+                <div id="char-preview-name" class="text-white font-bold text-sm truncate">New Character</div>
+                <div id="char-preview-tagline" class="text-[11px] text-zinc-400 line-clamp-3">A brief tagline will appear here.</div>
+              </div>
+              <p class="field-hint mt-3 text-center leading-relaxed">This is how the character will appear in the sidebar and header.</p>
+            </div>
+          </aside>
         </div>
       </div>
 
-      <div class="flex justify-end space-x-2 pt-2 border-t border-[#27272a]">
-        <button id="btn-cancel-char" class="px-4 py-2 rounded-xl bg-[#27272a] text-zinc-300 hover:text-white text-xs">Cancel</button>
-        <button id="btn-save-char" class="px-4 py-2 rounded-xl bg-indigo-600 text-white font-bold text-xs hover:bg-indigo-500 shadow-md">Save Character</button>
-      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn-secondary" data-dialog-close>Cancel</button>
+        <button type="button" id="btn-save-char" class="btn-primary">
+          <span id="char-save-label">Create Character</span>
+        </button>
+      </footer>
     </div>
-  </div>
+  </dialog>
 
-  <!-- Persona Modal -->
-  <div id="persona-modal" class="fixed inset-0 bg-black/80 flex items-center justify-center hidden z-50 p-4">
-    <div class="bg-[#18181b] border border-[#27272a] rounded-2xl w-full max-w-md p-6 space-y-4">
-      <h3 class="text-base font-bold text-white" id="persona-modal-title">User Persona</h3>
-      <div class="space-y-3 text-xs">
+  <!-- ─── Persona Dialog ───────────────────────────────────────────────── -->
+  <dialog id="persona-modal" class="modal" aria-labelledby="persona-modal-title">
+    <div class="modal-panel">
+      <header class="modal-header">
         <div>
-          <label class="block text-zinc-400 mb-1">Display Name</label>
-          <input type="text" id="input-persona-name" placeholder="User" class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500">
+          <h3 id="persona-modal-title" class="text-base font-bold text-white">User Persona</h3>
+          <p class="text-[11px] text-zinc-500 mt-0.5">How the AI sees you.</p>
         </div>
-        <div>
-          <label class="block text-zinc-400 mb-1">Pronouns</label>
-          <input type="text" id="input-persona-pronouns" placeholder="e.g. they/them, she/her, he/him" class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500">
-        </div>
-        <div>
-          <label class="block text-zinc-400 mb-1">Avatar Image (Upload)</label>
-          <div class="flex items-center gap-3">
-            <input type="file" id="input-persona-avatar-file" accept="image/*" class="text-xs text-zinc-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:bg-[#27272a] file:text-white file:cursor-pointer hover:file:bg-zinc-700">
-            <img id="preview-persona-avatar" alt="Persona preview" class="w-10 h-10 rounded-full object-cover border border-[#27272a] hidden">
+        <button type="button" class="modal-close" data-dialog-close aria-label="Close dialog">✕</button>
+      </header>
+
+      <div class="modal-body">
+        <div class="space-y-4 text-xs">
+          <div>
+            <label class="field-label" for="input-persona-name">Display name</label>
+            <input type="text" id="input-persona-name" placeholder="User" class="field-input" autocomplete="off">
+          </div>
+          <div>
+            <label class="field-label" for="input-persona-pronouns">Pronouns</label>
+            <input type="text" id="input-persona-pronouns" placeholder="e.g. they/them, she/her, he/him" class="field-input">
+          </div>
+          <div>
+            <span class="field-label">Avatar</span>
+            <div class="flex items-center gap-3">
+              <label class="avatar-drop" for="input-persona-avatar-file">
+                <img id="preview-persona-avatar" class="hidden" alt="Persona preview">
+                <span class="avatar-drop-hint" id="persona-avatar-hint">Drop<br>or click</span>
+                <input type="file" id="input-persona-avatar-file" accept="image/*" class="hidden">
+              </label>
+              <p class="field-hint flex-1 leading-relaxed">Optional. Shown next to your messages in the chat.</p>
+            </div>
+          </div>
+          <div>
+            <label class="field-label" for="input-persona-desc">Background / description</label>
+            <textarea id="input-persona-desc" rows="3" placeholder="Character traits, background, relationships..." class="field-input"></textarea>
           </div>
         </div>
-        <div>
-          <label class="block text-zinc-400 mb-1">Background / Description</label>
-          <textarea id="input-persona-desc" rows="3" placeholder="Describe your character traits, background..." class="w-full bg-[#202023] border border-[#27272a] rounded-xl p-2.5 text-white focus:outline-none focus:border-zinc-500"></textarea>
-        </div>
       </div>
 
-      <div class="flex justify-end space-x-2 pt-2 border-t border-[#27272a]">
-        <button id="btn-cancel-persona" class="px-4 py-2 rounded-xl bg-[#27272a] text-zinc-300 hover:text-white text-xs">Cancel</button>
-        <button id="btn-save-persona" class="px-4 py-2 rounded-xl bg-[#27272a] text-white hover:bg-zinc-700 font-bold text-xs">Save Persona</button>
-      </div>
+      <footer class="modal-footer">
+        <button type="button" class="btn-secondary" data-dialog-close>Cancel</button>
+        <button type="button" id="btn-save-persona" class="btn-primary">Save Persona</button>
+      </footer>
     </div>
-  </div>
+  </dialog>
 
   <script src="modules/config.js"></script>
   <script src="modules/api.js"></script>
